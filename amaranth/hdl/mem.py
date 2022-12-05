@@ -9,6 +9,141 @@ from .ir import Elaboratable, Instance
 __all__ = ["Memory", "ReadPort", "WritePort", "DummyPort"]
 
 
+class MemoryArray:
+    """A Array wrapper for uses with memory.
+
+    About
+    -----
+    This is a wrapper for the Array class but allows using memory that has not been initialized.
+    This is useful for two main reasongs:
+        1. For very large memories initalization can take a long time
+        2. Some memories, such as DRAM or lattice's SPRAM, cannot be initialized
+
+    Parameters
+    ----------
+    width : int
+        Access granularity. Each storage element of this memory is ``width`` bits in size.
+    depth : int
+        Word count. This memory contains ``depth`` storage elements.
+    init : list of int
+        Initial values. At power on, each storage element in this memory is initialized to
+        the corresponding element of ``init``, if any, or to zero otherwise.
+    no_init : bool
+        If ``True``, the memory will not be initialized. If a value is provided for ``init``, it will be ignored.
+    name : str
+        Name hint for this memory. If ``None`` (default) the name is inferred from the variable
+        name this ``Signal`` is assigned to.
+    attrs : dict
+        Dictionary of synthesis attributes.
+
+    Attributes
+    ----------
+    width : int
+    depth : int
+    init : list of int
+    no_init : bool
+    attrs : dict
+    """
+
+    def __init__(self, width, depth, init=None, no_init=False, name=None, simulate=True):
+        assert width > 0, "Memory width must be greater than 0"
+        assert depth > 0, "Memory depth must be greater than 0"
+        assert isinstance(width, int), "Memory width must be an integer, memory width must be fixed at compile time"
+        assert isinstance(depth, int), "Memory depth must be an integer, memory depth must be fixed at compile time"
+
+        self.depth = depth
+        self.width = width
+        self.no_init = no_init
+        self.name = name or tracer.get_var_name(depth=2, default="$memory")
+
+        if simulate and not self.no_init:
+            for addr in range(self.depth):
+                self._array.append(Signal(self.width, name="{}({})".format(name or "memory", addr)))
+
+        self.init = init
+
+        if self.no_init:
+            self._array = {}
+        else:
+            self._array = Array(init)
+        
+
+    @property
+    def init(self):
+        return self._init
+
+    @init.setter
+    def init(self, new_init):
+        self._init = [] if new_init is None else list(new_init)
+        if len(self.init) > self.depth:
+            raise ValueError("Memory initialization value count exceed memory depth ({} > {})"
+                             .format(len(self.init), self.depth))
+
+        try:
+            for addr in range(len(self._array)):
+                if not self.no_init:
+                    if addr < len(self._init):
+                        self._array[addr].reset = operator.index(self._init[addr])
+                    else:
+                        self._array[addr].reset = 0
+
+        except TypeError as e:
+            raise TypeError("Memory initialization value at address {:x}: {}"
+                            .format(addr, e)) from None
+    
+
+    def __getitem__(self, index):
+        if self.no_init:
+            try:
+                return self._array[index]
+            except KeyError:
+                raise KeyError("Reading from uninitialized memory is not allowed as it results in undeterministic behavior")
+        else:
+            return self._array[index]
+
+    def __len__(self):
+        if self.no_init:
+            return len(self.depth) # because the we don' care about initalization, we can't use the length of the dictionary
+        else:
+            return len(self._array)
+
+    def _check_mutability(self):    # we only care about mutability if we are using an Array
+        if not self.no_init:
+            self._array = self._array._check_mutability()
+
+    def _check_bounds(self, index):     # we need bounds checking for dictionaries because they don't have a fixed length natively
+        if self.no_init:
+            if index < 0:
+                raise IndexError("Negative index is out of range")      # not sure this is needed, but trying to be extra careful
+
+            if index >= self.depth:
+                raise IndexError("Index out of bounds, index: {}, depth: {}".format(index, self.depth))
+
+    def __setitem__(self, index, value):
+        self._check_mutability()
+        self._check_bounds(index)
+        self._array[index] = value
+
+    def __delitem__(self, index):
+        self._check_mutability()
+        self._check_bounds(index)
+        del self._array[index]
+
+    def insert(self, index, value):
+        self._check_mutability()
+        self._check_bounds(index)
+        if self.no_init:
+            self._array[index] = value
+        else:
+            self._array.insert(index, value)
+
+    def __repr__(self):
+        if self.no_init:
+            return "(memarray dict [{}])".format(", ".join(map(repr, self._array)))
+        else:
+            return self._array.__repr__()
+
+
 class Memory:
     """A word addressable storage.
 
@@ -35,7 +170,7 @@ class Memory:
     init : list of int
     attrs : dict
     """
-    def __init__(self, *, width, depth, init=None, name=None, attrs=None, simulate=True):
+    def __init__(self, *, width, depth, init=None, no_init=False, name=None, attrs=None, simulate=True):
         if not isinstance(width, int) or width < 0:
             raise TypeError("Memory width must be a non-negative integer, not {!r}"
                             .format(width))
@@ -48,37 +183,15 @@ class Memory:
 
         self.width = width
         self.depth = depth
+        self.no_init = no_init
         self.attrs = OrderedDict(() if attrs is None else attrs)
 
-        # Array of signals for simulation.
-        self._array = Array()
-        if simulate:
-            for addr in range(self.depth):
-                self._array.append(Signal(self.width, name="{}({})"
-                                          .format(name or "memory", addr)))
-
-        self.init = init
+        self._array = MemoryArray(self.depth, self.width, init=init, no_init=self.no_init, name=self.name, simulate=simulate)
 
     @property
     def init(self):
-        return self._init
+        return self._array.init
 
-    @init.setter
-    def init(self, new_init):
-        self._init = [] if new_init is None else list(new_init)
-        if len(self.init) > self.depth:
-            raise ValueError("Memory initialization value count exceed memory depth ({} > {})"
-                             .format(len(self.init), self.depth))
-
-        try:
-            for addr in range(len(self._array)):
-                if addr < len(self._init):
-                    self._array[addr].reset = operator.index(self._init[addr])
-                else:
-                    self._array[addr].reset = 0
-        except TypeError as e:
-            raise TypeError("Memory initialization value at address {:x}: {}"
-                            .format(addr, e)) from None
 
     def read_port(self, *, src_loc_at=0, **kwargs):
         """Get a read port.
@@ -115,7 +228,6 @@ class Memory:
     def __getitem__(self, index):
         """Simulation only."""
         return self._array[index]
-
 
 class ReadPort(Elaboratable):
     """A memory read port.
