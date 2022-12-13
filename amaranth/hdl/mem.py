@@ -56,16 +56,16 @@ class MemoryArray:
         self.no_init = no_init
         self.name = name or tracer.get_var_name(depth=2, default="$memory")
 
-        if simulate and not self.no_init:
-            for addr in range(self.depth):
-                self._array.append(Signal(self.width, name="{}({})".format(name or "memory", addr)))
-
-        self.init = init
-
         if self.no_init:
             self._array = {}
         else:
-            self._array = Array(init)
+            self._array = Array()
+
+            if simulate:
+                for addr in range(self.depth):
+                    self._array.append(Signal(self.width, name="{}({})".format(name or "memory", addr)))
+
+        self.init = init
         
 
     @property
@@ -80,8 +80,8 @@ class MemoryArray:
                              .format(len(self.init), self.depth))
 
         try:
-            for addr in range(len(self._array)):
-                if not self.no_init:
+            if not self.no_init:
+                for addr in range(len(self._array)):
                     if addr < len(self._init):
                         self._array[addr].reset = operator.index(self._init[addr])
                     else:
@@ -93,6 +93,7 @@ class MemoryArray:
     
 
     def __getitem__(self, index):
+        self._check_bounds(index)
         if self.no_init:
             try:
                 return self._array[index]
@@ -111,13 +112,12 @@ class MemoryArray:
         if not self.no_init:
             self._array = self._array._check_mutability()
 
-    def _check_bounds(self, index):     # we need bounds checking for dictionaries because they don't have a fixed length natively
-        if self.no_init:
-            if index < 0:
-                raise IndexError("Negative index is out of range")      # not sure this is needed, but trying to be extra careful
+    def _check_bounds(self, index):
+        if index < 0:
+            raise IndexError("Negative index is out of range")      # not sure this is needed, but trying to be extra careful
 
-            if index >= self.depth:
-                raise IndexError("Index out of bounds, index: {}, depth: {}".format(index, self.depth))
+        if index >= self.depth:
+            raise IndexError("Index out of bounds, index: {} > depth: {}".format(index, self.depth))
 
     def __setitem__(self, index, value):
         self._check_mutability()
@@ -157,6 +157,9 @@ class Memory:
         Initial values. At power on, each storage element in this memory is initialized to
         the corresponding element of ``init``, if any, or to zero otherwise.
         Uninitialized memories are not currently supported.
+    no_init : bool
+        If ``True``, the memory will not be initialized. If a value is provided for ``init``, it will be ignored.
+        If there is a value given for ``init`` then the memory read port will be initalized to the value of ``init``.
     name : str
         Name hint for this memory. If ``None`` (default) the name is inferred from the variable
         name this ``Signal`` is assigned to.
@@ -186,7 +189,7 @@ class Memory:
         self.no_init = no_init
         self.attrs = OrderedDict(() if attrs is None else attrs)
 
-        self._array = MemoryArray(self.depth, self.width, init=init, no_init=self.no_init, name=self.name, simulate=simulate)
+        self._array = MemoryArray(self.width, self.depth, init=init, no_init=self.no_init, name=self.name, simulate=simulate)
 
     @property
     def init(self):
