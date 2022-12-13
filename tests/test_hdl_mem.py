@@ -19,6 +19,8 @@ class MemoryTestCase(FHDLTestCase):
         m = Memory(width=8, depth=4)
         self.assertEqual(m.width, 8)
         self.assertEqual(m.depth, 4)
+        self.assertEqual(m._array.width, 8)
+        self.assertEqual(m._array.depth, 4)
 
     def test_geometry_wrong(self):
         with self.assertRaisesRegex(TypeError,
@@ -30,12 +32,60 @@ class MemoryTestCase(FHDLTestCase):
 
     def test_init(self):
         m = Memory(width=8, depth=4, init=range(4))
-        self.assertEqual(m.init, [0, 1, 2, 3])
+        init = [0,1,2,3]
+        self.assertEqual(m.init, init)
+        self.assertEqual(m._array.init, init)
+        for s, ini in zip(m._array._array, init):
+            self.assertEqual(s.reset, ini)
+
+    def test_init_default(self):
+        m = Memory(width=8, depth=4)
+        self.assertEqual(m.init, [])
+        self.assertEqual(m._array.init, [])
+        for s in m._array._array:
+            self.assertEqual(s.reset, 0)
+
+    def test_out_of_range(self):
+        m = Memory(width=8, depth=4)
+        with self.assertRaisesRegex(IndexError,
+                r"Index out of bounds, index: 4 > depth: 4"):
+            m._array[4]
+
+    def test_no_init(self):
+        m = Memory(width=8, depth=4, no_init=True)
+        self.assertEqual(m.no_init, True)
+        self.assertEqual(m._array.no_init, True)
+        self.assertIsInstance(m._array._array, dict)        # should be dict because there is no memory initalization
+
+    def test_no_init_rbw(self):                 # read before write
+        m = Memory(width=8, depth=4, no_init=True)
+        self.assertEqual(m.no_init, True)
+        with self.assertRaisesRegex(KeyError,
+                r"Reading from uninitialized memory is not allowed as it results in undeterministic behavior"):
+            a = m._array[0]
+
+    def test_no_init_wbr(self):                 # write before read
+        m = Memory(width=8, depth=4, no_init=True)
+        self.assertEqual(m.no_init, True)
+        m._array[0] = 1
+        self.assertEqual(m._array[0], 1)
+
+    def test_no_init_out_of_range(self):
+        m = Memory(width=8, depth=4, no_init=True)
+        self.assertEqual(m.no_init, True)
+        with self.assertRaisesRegex(IndexError,
+                r"Index out of bounds, index: 4 > depth: 4"):
+            a = m._array[4]
 
     def test_init_wrong_count(self):
         with self.assertRaisesRegex(ValueError,
                 r"^Memory initialization value count exceed memory depth \(8 > 4\)$"):
             m = Memory(width=8, depth=4, init=range(8))
+
+    def test_no_init_wrong_count(self):
+        with self.assertRaisesRegex(ValueError,
+                r"^Memory initialization value count exceed memory depth \(8 > 4\)$"):
+            m = Memory(width=8, depth=4, init=range(8), no_init=True)
 
     def test_init_wrong_type(self):
         with self.assertRaisesRegex(TypeError,
